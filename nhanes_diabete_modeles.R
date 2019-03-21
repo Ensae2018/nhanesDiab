@@ -19,19 +19,38 @@ library(caret)
 #SANS INTERACTION
 #===============================================================================
 
-nhanes <- read.csv("nhanes_diab_mice_apres.csv")
+nhanes <- read.csv("nhanes_dia_avant_transco.csv",header=TRUE,sep=",",dec=".")
 str(nhanes)
 nhanes[,1]<-NULL
 dim(nhanes)#5221x85
 str(nhanes)
 
+nhanes$SEQN<-factor(nhanes$SEQN)
+nhanes$RIAGENDR_demo<-factor(nhanes$RIAGENDR_demo)
+nhanes$BPQ020_bpq<-as.factor(nhanes$BPQ020_bpq)
+nhanes$BPQ080_bpq<-as.factor(nhanes$BPQ080_bpq)
+nhanes$MCQ080_mcq<-as.factor(nhanes$MCQ080_mcq)
+nhanes$MCQ160A_mcq<-as.factor(nhanes$MCQ160A_mcq)
+nhanes$MCQ160B_mcq<-as.factor(nhanes$MCQ160B_mcq)
+nhanes$MCQ160C_mcq<-as.factor(nhanes$MCQ160C_mcq)
+nhanes$MCQ160D_mcq<-as.factor(nhanes$MCQ160D_mcq)
+nhanes$MCQ160E_mcq<-as.factor(nhanes$MCQ160E_mcq)
+nhanes$MCQ160F_mcq<-as.factor(nhanes$MCQ160F_mcq)
+nhanes$MCQ160G_mcq<-as.factor(nhanes$MCQ160G_mcq)
+nhanes$MCQ160M_mcq<-as.factor(nhanes$MCQ160M_mcq)
+nhanes$MCQ160N_mcq<-as.factor(nhanes$MCQ160N_mcq)
+nhanes$SLQ050_slq<-as.factor(nhanes$SLQ050_slq)
+nhanes$HEQ010_heq<-as.factor(nhanes$HEQ010_heq)
+nhanes$HEQ030_heq<-as.factor(nhanes$HEQ030_heq)
+
+
+str(nhanes)
 
 #Regression logistique avec les 84 variables (AIC 3634)
 #------------------------------------------------------
 set.seed(1234)
 reglog<-glm(DIQ010_diq~.,data=nhanes[,-1],family="binomial")
 summary(reglog)
-
 
 
 #Regression logistique améliorée avec le step
@@ -74,31 +93,35 @@ RES<- data.frame(Y=nhanes$DIQ010_diq,
                  elastic=0,
                  foret=0,
                  adaboost=0,
-                 logiboost=0,
+                 logitboost=0,
                  svmlin=0,
                  svmrad=0)
 
 XX<-model.matrix(nhanes$DIQ010_diq~.,data=nhanes[,-1])
 
 LAridge=list()
-
+LAlasso=list()
+LAelas=list()
 
 foreach (i = 1:bloc, .packages = c("gbm","glmnet","randomForest","e1071")) %dopar% {
   XXA <- XX[ind!=i,]
   YYA <- as.matrix(nhanes[ind!=i,"DIQ010_diq"])
-  
+  print(i)
   #1-logistique complète
   #-------------------
+  print("log")
   mod <- glm(DIQ010_diq~.,data=nhanes[ind!=i,-1],family="binomial")
   RES[ind==i,"logcomp"] <- predict(mod,nhanes[ind==i,-1],type="response")
   
   # #2-logistique avec step
   # #--------------------
+  print("logstep")
   RES[ind==i,"logstep"] <- predict(stepreglog,nhanes[ind==i,-1],type="response")
   
   
   #3-logistique réduite 15
   #-----------------------
+  print("logred15")
   mod <- glm(DIQ010_diq~RIDAGEYR_demo +DR1TSUGR_dr1tot+BPQ080_bpq+MCQ080_mcq+BPQ020_bpq+DR1TALCO_dr1tot+DR1TMOIS_dr1tot+
                RIAGENDR_demo+DR1.320Z_dr1tot+DR1TCHOL_dr1tot+DR1TPROT_dr1tot+INDFMPIR_demo+DR1TIRON_dr1tot+Var_TENSIONDI+DR1TCAFF_dr1tot,
              data=nhanes[ind!=i,-1],family="binomial")
@@ -107,6 +130,7 @@ foreach (i = 1:bloc, .packages = c("gbm","glmnet","randomForest","e1071")) %dopa
   
   #4-ridge
   #------
+  print("ridge")
   tmp <- cv.glmnet(XXA,YYA,alpha=0,family="binomial")
   LAridge <- c(LAridge,tmp$lambda.min)
   mod <- glmnet(XXA,YYA,alpha=0,lambda=tmp$lambda.min,family="binomial")
@@ -114,48 +138,59 @@ foreach (i = 1:bloc, .packages = c("gbm","glmnet","randomForest","e1071")) %dopa
   
   #5-lasso
   #-----
-  mod <- cv.glmnet(XXA,YYA,alpha=1,family="binomial")
-  RES[ind==i,"lasso"] <- predict(mod,newx=XX[ind==i,],lambda=mod$lambda.1se,type="response")
+  print("lasso")
+  tmp <- cv.glmnet(XXA,YYA,alpha=1,family="binomial")
+  LAlasso <- c(LAridge,tmp$lambda.min)
+  mod <- glmnet(XXA,YYA,alpha=0,lambda=tmp$lambda.min,family="binomial")
+  RES[ind==i,"lasso"] <- predict(mod,newx=XX[ind==i,],type="response")
   
   #6-elastic
   #-------
-  mod <- cv.glmnet(XXA,YYA,alpha=0.5,family="binomial")
-  mod <- glmnet(XXA,YYA,alpha=.5,lambda=tmp$lambda.min,family="binomial")
+  print("elastic")
+  tmp <- cv.glmnet(XXA,YYA,alpha=0.5,family="binomial")
+  LAelas <- c(LAridge,tmp$lambda.min)
+  mod <- glmnet(XXA,YYA,alpha=0,lambda=tmp$lambda.min,family="binomial")
   RES[ind==i,"elastic"] <- predict(mod,newx=XX[ind==i,],type="response")
   
   #7-foret
   #-----
+  print("foret")
   mod <- randomForest(DIQ010_diq~.,data=nhanesfac[ind!=i,-1])
   RES[ind==i,"foret"] <- predict(mod,nhanesfac[ind==i,-1],type="prob")[,2]
   
   #8-adaboost
   #--------
-  tmp <- gbm(DIQ010_diq~.^2,data = nhanes[ind!=i,-1], distribution = "adaboost", interaction.depth = 2,
+  print("adaboost")
+  tmp <- gbm(DIQ010_diq~.,data = nhanes[ind!=i,-1], distribution = "adaboost", interaction.depth = 2,
              shrinkage = 0.1,n.trees = 500)
   M <- gbm.perf(tmp)[1]
-  mod <- gbm(DIQ010_diq~.^2,data = nhanes[ind!=i,-1], distribution = "adaboost", interaction.depth = 2,
+  mod <- gbm(DIQ010_diq~.,data = nhanes[ind!=i,-1], distribution = "adaboost", interaction.depth = 2,
              shrinkage = 0.1,n.trees = M)
   RES[ind==i, "adaboost"] <- predict(mod, newdata=nhanes[ind==i,-1], type = "response", n.trees = M)
   
-  #9-logiboost
+  #9-logitboost
   #---------
-  tmp <- gbm(DIQ010_diq~.^2,data=nhanes[ind!=i,-1], distribution="bernoulli", interaction.depth = 2,
-             shrinkage=0.1,n.trees=500)
+  print("logitboost")
+  tmp <- gbm(DIQ010_diq~.,data = nhanes[ind!=i,-1], distribution = "bernoulli", interaction.depth = 2,
+             shrinkage = 0.1,n.trees = 500)
   M <- gbm.perf(tmp)[1]
-  mod <- gbm(DIQ010_diq~.^2,data=nhanes[ind!=i,-1], distribution="bernoulli", interaction.depth = 2,
-             shrinkage=0.1,n.trees=M)
-  RES[ind==i, "logiboost"] <- predict(mod,newdata=nhanes[ind==i,-1], type= "response", n.trees = M)
+  mod <- gbm(DIQ010_diq~.,data = nhanes[ind!=i,-1], distribution = "bernoulli", interaction.depth = 2,
+             shrinkage = 0.1,n.trees = M)
+  RES[ind==i, "logitboost"] <- predict(mod, newdata=nhanes[ind==i,-1], type = "response", n.trees = M)
   
   #10-svm linéaire
   #---------------
-  mod <- svm(DIQ010_diq~.,data=nhanesfac[ind!=i,-1], kernel="linear",probability=T)
-  RES[ind==i,"svmlin"] <- attr(predict(mod,newdata = nhanesfac[ind==i,-1],probability = T),"probabilities")[,2]
+  print("svmlin")
+  mod <- svm(DIQ010_diq~.,data=nhanes[ind!=i,-1], kernel="linear")
+  RES[ind==i,"svmlin"] <- predict(mod,newdata = nhanes[ind==i,-1])
   
   #11-svm radial
   #-------------
-  mod <- svm(DIQ010_diq~.,data=nhanesfac[ind!=i,-1], kernel="radial",probability=T)
-  RES[ind==i,"svmrad"] <- attr(predict(mod,newdata = nhanesfac[ind==i,-1],probability = T),"probabilities")[,2]
-}
+  print("svmrad")
+  mod <- svm(DIQ010_diq~.,data=nhanes[ind!=i,-1], kernel="radial")
+  RES[ind==i,"svmrad"] <- predict(mod,newdata = nhanes[ind==i,-1])
+  
+  }
 
 
 
@@ -191,7 +226,7 @@ lines(rocsvmlin,col="grey")
 rocsvmrad<-roc(RES[,1],RES[,12])
 lines(rocsvmrad,col="darkgrey")
 
-legend("bottomright", legend=c("logcomp","logstep","logred15","ridge","lasso","elastic","foret","adaboost","logiboost","svmlin","svmrad"),
+legend("bottomright", legend=c("logcomp","logstep","logred15","ridge","lasso","elastic","foret","adaboost","logitboost","svmlin","svmrad"),
        col=c("black", "red","blue","blue","orange","brown","green","purple","dodger blue","grey","darkgrey"),lty=c(1,3,3,1,1,1,1,1,1,1),lwd=c(1,2,2,1,1,1,1,1,1,2), cex=1)
 
 
@@ -243,15 +278,15 @@ write.csv(RES,"res_dia.csv")
 # RESp[elastic<seuil,elasticp:=0]
 # RESp[adaboost>=seuil,adaboostp:=1,]
 # RESp[adaboost<seuil,adaboostp:=0,]
-# RESp[logiboost>=seuil,logiboostp:=1,]
-# RESp[logiboost<seuil,logiboostp:=0]
+# RESp[logitboost>=seuil,logitboostp:=1,]
+# RESp[logitboost<seuil,logitboostp:=0]
 # 
 # RESp<-data.frame(RESp)
 # 
 # str(RESp)
 
 
-# resultat<-data.frame(logcomp=0,logstep=0,foret=0,ridge=0,lasso=0,elastic=0,adaboost=0,logiboost=0)
+# resultat<-data.frame(logcomp=0,logstep=0,foret=0,ridge=0,lasso=0,elastic=0,adaboost=0,logitboost=0)
 # for (i in 1:8){
 #   resultat[1,i]<-Metrics::auc(RESp[,1],RESp[,i+1])  
 #   resultat[2,i]<-Metrics::accuracy(RESp[,1],RESp[,i+9])
@@ -301,7 +336,7 @@ write.csv(RES,"res_dia.csv")
 #     taux_synthese[k,i-1]<-monerreur(RES[,i],RES[,1],j)[[2]]
 #     k<-k+1
 #   }  }
-# colnames(taux_synthese)<-c("logcomp","logstep","foret","ridge","lasso","elastic","adaboost","logiboost")
+# colnames(taux_synthese)<-c("logcomp","logstep","foret","ridge","lasso","elastic","adaboost","logitboost")
 # rownames(taux_synthese)<-seq(0,1,0.1)
 # taux_synthese
 # 
@@ -316,9 +351,9 @@ write.csv(RES,"res_dia.csv")
 # lines(seq(0,1,0.1),taux_synthese$lasso,col="orange",lwd=2)
 # lines(seq(0,1,0.1),taux_synthese$elastic,col="brown",lwd=2)
 # lines(seq(0,1,0.1),taux_synthese$adaboost,col="purple",lwd=2)
-# lines(seq(0,1,0.1),taux_synthese$logiboost,col="dodger blue",lwd=2)
+# lines(seq(0,1,0.1),taux_synthese$logitboost,col="dodger blue",lwd=2)
 # 
-# legend("topright", legend=c("logcomp","logstep","foret","ridge","lasso","elastic","adaboost","logiboost"),
+# legend("topright", legend=c("logcomp","logstep","foret","ridge","lasso","elastic","adaboost","logitboost"),
 #        col=c("black", "red","green","blue","orange","brown","purple","dodger blue"),lwd=2,lty=c(1,3,1,1,1,1,1,1), cex=1)
 
 
@@ -328,17 +363,9 @@ write.csv(RES,"res_dia.csv")
 #=========================================
 
 
-don <- read.csv("nhanes_diab_mice_apres.csv")
-don$X <- NULL
-don$SEQN<-NULL
-str(don)
-
 don<-cbind(don[,names(don)!="DIQ010_diq"],DIQ010_diq=don[,c("DIQ010_diq")])
 
-
-
-don2<-don
-don2$DIQ010_diq<-factor(don2$DIQ010_diq)
+str(don)
 
 XX <- as.matrix(model.matrix(~.,don)[,-ncol(model.matrix(~.,don))])
 YY <- as.matrix(model.matrix(~.,don)[,ncol(model.matrix(~.,don))])
@@ -365,7 +392,7 @@ variable_imp <- function(x,k=15,t=1,mot=""){
   colnames(tempo)[3] <- paste("rang",mot,sep = "_")
   return(tempo)
 }
-str(don)
+
 #1 Importance variable pour le modele logistique
 mod_log <- glm(DIQ010_diq~.,data=don,family="binomial")
 varimplog <- variable_imp(x=mod_log,t=1,mot="log")
@@ -429,13 +456,13 @@ mod_adaboost <- gbm(as.numeric(DIQ010_diq)~.,data = don, distribution = "adaboos
                     shrinkage = 0.1,n.trees = M)
 varimpada <- variable_imp(summary(mod_adaboost),t=3, mot="adaboost")
 
-#8)Importance variable pour le modele logiboost
+#8)Importance variable pour le modele logitboost
 tmp <- gbm(as.numeric(DIQ010_diq)~.,data=don, distribution="bernoulli", interaction.depth = 2,
            shrinkage=0.1,n.trees=500)
 M <- gbm.perf(tmp)[1]
-mod_logiboost <- gbm(as.numeric(DIQ010_diq)~.,data=don, distribution="bernoulli", interaction.depth = 2,
+mod_logitboost <- gbm(as.numeric(DIQ010_diq)~.,data=don, distribution="bernoulli", interaction.depth = 2,
                      shrinkage=0.1,n.trees=M)
-varimplogibo <- variable_imp(summary(mod_logiboost),t=3,mot="logiboost")
+varimplogibo <- variable_imp(summary(mod_logitboost),t=3,mot="logitboost")
 
 #9)Importance variable pour le modele svm linéaire
 # mod_svmlin <- svm(DIQ010_diq~.,data=don2, kernel="linear",probability=T)

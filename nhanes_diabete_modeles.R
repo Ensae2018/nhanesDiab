@@ -53,6 +53,8 @@ reglog<-glm(DIQ010_diq~.,data=nhanes[,-1],family="binomial")
 summary(reglog)
 
 
+
+
 #Regression logistique améliorée avec le step
 #--------------------------------------------
 
@@ -196,8 +198,6 @@ foreach (i = 1:bloc, .packages = c("gbm","glmnet","randomForest","e1071")) %dopa
 
 
 
-
-
 #METRIQUES
 #---------
 
@@ -251,6 +251,176 @@ monerreur <- function(X,Y,seuil=0.5){
 
 .
 write.csv(RES,"res_dia.csv")
+
+
+
+
+
+#=========================================
+#Traitement de l'importance des variables
+#=========================================
+
+nhanes$SEQN<-NULL
+nhanes<-cbind(nhanes[,names(nhanes)!="DIQ010_diq"],DIQ010_diq=nhanes[,c("DIQ010_diq")])
+
+str(nhanes)
+
+
+XX<- model.matrix(DIQ010_diq~.,data=nhanes)
+YY <- as.matrix(nhanes[,c("DIQ010_diq")])
+# XX <- as.matrix(model.matrix(~.,nhanes)[,-ncol(model.matrix(~.,nhanes))])
+# YY <- as.matrix(model.matrix(~.,nhanes)[,ncol(model.matrix(~.,nhanes))])
+
+# CrÃ©ation de la fonction pour calculer l'importance des variables
+# x est le modele; k est le nombre de variable
+# valeur de t: (1 pour glm et randomforest, 2 pour glmnet, 3 pour gbm)
+variable_imp <- function(x,k=15,t=1,mot=""){
+  switch(t,
+         x <- varImp(x), #on utilise varImp de Caret pour glm et randomforest
+         x <- as.data.frame(as.matrix(x)), # utile pour mise au format dataframe glmnet
+         x[,1] <- NULL # utile pour enlever une colonne en trop pour gbm
+  )
+  tempo <- cbind(row.names(x),x)
+  row.names(tempo) <- NULL
+  colnames(tempo)[1] <- "variable"
+  colnames(tempo)[2] <-  "importance"
+  tempo[,1] <- gsub("YES$","",tempo[,1],ignore.case = TRUE)
+  tempo[,1] <- gsub("NO$","",tempo[,1],ignore.case = TRUE)
+  tempo[,2] <- (tempo[,2]-mean(tempo[,2]))/sqrt(var(tempo[,2])) # on centre rÃ©duit
+  tempo <- arrange(tempo, desc(importance))[1:k,]
+  colnames(tempo)[2] <-  paste("imp",mot,sep = "_")
+  tempo$rank <- seq(1:k)
+  colnames(tempo)[3] <- paste("rang",mot,sep = "_")
+  return(tempo)
+}
+
+#1 Importance variable pour le modele logistique
+mod_log <- glm(DIQ010_diq~.,data=nhanes,family="binomial")
+varimplog <- variable_imp(x=mod_log,t=1,mot="log")
+varimplog
+
+#2Importance variable pour le modele logistique step
+mod_log <- glm(DIQ010_diq ~ RIDAGEYR_demo + MCQ080_mcq + BPQ020_bpq + 
+                 BPQ080_bpq + DR1TSUGR_dr1tot + BMXWT_bmx + INDFMPIR_demo + 
+                 DR1TCHOL_dr1tot + DR1TALCO_dr1tot + RIAGENDR_demo + Var_ACTIVITE + 
+                 Var_DENTISTE + Var_TENSIONDI + SLQ050_slq + DR1TACAR_dr1tot + 
+                 BMXBMI_bmx + Var_SITUATION + HOD050_hoq + DR1TMOIS_dr1tot + 
+                 DR1.320Z_dr1tot + DR1TCAFF_dr1tot + DR1TPROT_dr1tot + DR1TIRON_dr1tot + 
+                 MCQ160N_mcq + DR1TRET_dr1tot + MCQ160D_mcq + MCQ160C_mcq + 
+                 DR1TSELE_dr1tot + DR1TFOLA_dr1tot,data=nhanes,family="binomial")
+
+varimplogstep <- variable_imp(x=mod_log,t=1,mot="logstep")
+varimplogstep
+
+# variable     imp_log rang_log
+# 1    RIDAGEYR_demo  2.99402171        1
+# 2  DR1TSUGR_dr1tot  2.04803630        2
+# 3       BPQ080_bpq  1.76073033        3
+# 4       MCQ080_mcq  1.50381126        4
+# 5       BPQ020_bpq  1.25641657        5
+# 6  DR1TALCO_dr1tot  0.81241564        6
+# 7  DR1TMOIS_dr1tot  0.45875503        7
+# 8    RIAGENDR_demo  0.12360083        8
+# 9  DR1.320Z_dr1tot  0.11885295        9
+# 10 DR1TCHOL_dr1tot  0.09586159       10
+# 11 DR1TPROT_dr1tot  0.06684281       11
+# 12   INDFMPIR_demo  0.04296765       12
+# 13 DR1TIRON_dr1tot -0.11450863       13
+# 14   Var_TENSIONDI -0.16515044       14
+# 15 DR1TCAFF_dr1tot -0.17212308       15
+
+
+#3)Importance variable pour le modele ridge
+tmp <- cv.glmnet(XX,YY,alpha=0,family="binomial")
+mod_ridge  <- glmnet(XX,YY,alpha=0,lambda=tmp$lambda.min, family="binomial")
+varimpridge <- variable_imp(x=abs(mod_ridge$beta),t=2,mot="ridge")
+
+#4)Importance variable pour le modele lasso (colnames(XX)[mod_lasso$beta@i])
+tmp <- cv.glmnet(XX,YY, alpha=1, family="binomial")
+mod_lasso <- glmnet(XX,YY,alpha=1, lambda =tmp$lambda.1se,family="binomial" )
+varimplasso <- variable_imp(x=abs(mod_lasso$beta),t=2, mot="lasso")
+
+#5)Importance variable pour le modele elastic
+tmp <- cv.glmnet(XX,YY, alpha=0.5, family="binomial")
+mod_elastic <- glmnet(XX,YY,alpha = 0.5, lambda = tmp$lambda.min, family="binomial")
+varimpelastic <- variable_imp(abs(mod_elastic$beta),t=2,mot = "elastic")
+
+#6)Importance variable pour le modele Foret
+mod_foret <- randomForest(factor(DIQ010_diq)~., data = nhanes)
+varimpforet <- variable_imp(mod_foret,t=1,mot="foret")
+
+#7)Importance variable pour le modele adaboost
+tmp <- gbm(as.numeric(DIQ010_diq)~.,data = nhanes, distribution = "adaboost", interaction.depth = 2,
+           shrinkage = 0.1,n.trees = 500)
+M <- gbm.perf(tmp)[1]
+mod_adaboost <- gbm(as.numeric(DIQ010_diq)~.,data = nhanes, distribution = "adaboost", interaction.depth = 2,
+                    shrinkage = 0.1,n.trees = M)
+varimpada <- variable_imp(summary(mod_adaboost),t=3, mot="adaboost")
+
+#8)Importance variable pour le modele logitboost
+tmp <- gbm(as.numeric(DIQ010_diq)~.,data=nhanes, distribution="bernoulli", interaction.depth = 2,
+           shrinkage=0.1,n.trees=500)
+M <- gbm.perf(tmp)[1]
+mod_logitboost <- gbm(as.numeric(DIQ010_diq)~.,data=nhanes, distribution="bernoulli", interaction.depth = 2,
+                     shrinkage=0.1,n.trees=M)
+varimplogibo <- variable_imp(summary(mod_logitboost),t=3,mot="logitboost")
+
+#9)Importance variable pour le modele svm linéaire
+# mod_svmlin <- svm(DIQ010_diq~.,data=nhanes2, kernel="linear",probability=T)
+# varimpsvmlin <- variable_imp(summary(mod_svmlin),t=3,mot="svmlin")
+
+#10)Importance variable pour le modele svm radial
+# mod_svmrad <- svm(DIQ010_diq~.,data=nhanes2, kernel="radial",probability=T)
+# varimpsvmrad <- variable_imp(summary(mod_svmrad),t=3,mot="svmrad")
+
+# Croisement des tables d'importance des variables
+choix_var <- varimplog %>%
+  full_join(varimplogstep) %>%
+  full_join(varimpridge) %>%
+  full_join(varimplasso) %>%
+  full_join(varimpelastic) %>%
+  full_join(varimpforet) %>%
+  full_join(varimpada) %>%
+  full_join(varimplogibo) 
+  # full_join(varimpsvmlin) %>%
+  # full_join(varimpsvmrad)
+
+choix_var <- cbind(choix_var[,1],choix_var[,c(which(grepl("^imp",names(choix_var))))])
+
+choix_var <- as.data.frame(choix_var)
+names(choix_var)[1] <- "variable"
+write.csv2(choix_var,"choix_var_dia.csv",row.names = FALSE)
+
+
+
+
+#tuning de la random forest
+#--------------------------
+
+# set.seed(1234)
+# mod_complet <- randomForest(DIQ010_diq~.,data=nhanesfac[,-1],ntree=1000)
+# plot(mod_complet$err.rate[, 1], type = "l", xlab = "nombre d'arbres", ylab = "erreur OOB")
+# legend("topright", legend=c("mod_complet"),col=c("red"),lty=1,cex=1)
+# 
+# print(mod_complet)
+# 
+# #? l'issue de cette ?tape je retiens le mod?le r?duit et ntree=200
+# 
+# 
+# set.seed(1234)
+# oob<-list()
+# for (i in seq(2,10,1)) {
+#   mod_complet <- randomForest(DIQ010_diq~.,data=nhanesfac[,-1],ntree=200,mtry=i)  
+#   oob[[i]]<-mod_complet$err.rate[, 1][200]
+#   }
+# 
+# oob 
+# oob<-unlist(oob)
+# plot(x=seq(2,10,1),y=oob,xlab="mtry")
+# lines(x=seq(2,10,1),y=oob)
+# #mtry=6 donne le meilleur résultat
+
+
 
 
 
@@ -355,173 +525,6 @@ write.csv(RES,"res_dia.csv")
 # 
 # legend("topright", legend=c("logcomp","logstep","foret","ridge","lasso","elastic","adaboost","logitboost"),
 #        col=c("black", "red","green","blue","orange","brown","purple","dodger blue"),lwd=2,lty=c(1,3,1,1,1,1,1,1), cex=1)
-
-
-
-#=========================================
-#Traitement de l'importance des variables
-#=========================================
-
-
-don<-cbind(don[,names(don)!="DIQ010_diq"],DIQ010_diq=don[,c("DIQ010_diq")])
-
-str(don)
-
-XX <- as.matrix(model.matrix(~.,don)[,-ncol(model.matrix(~.,don))])
-YY <- as.matrix(model.matrix(~.,don)[,ncol(model.matrix(~.,don))])
-
-# CrÃ©ation de la fonction pour calculer l'importance des variables
-# x est le modele; k est le nombre de variable
-# valeur de t: (1 pour glm et randomforest, 2 pour glmnet, 3 pour gbm)
-variable_imp <- function(x,k=15,t=1,mot=""){
-  switch(t,
-         x <- varImp(x), #on utilise varImp de Caret pour glm et randomforest
-         x <- as.data.frame(as.matrix(x)), # utile pour mise au format dataframe glmnet
-         x[,1] <- NULL # utile pour enlever une colonne en trop pour gbm
-  )
-  tempo <- cbind(row.names(x),x)
-  row.names(tempo) <- NULL
-  colnames(tempo)[1] <- "variable"
-  colnames(tempo)[2] <-  "importance"
-  tempo[,1] <- gsub("YES$","",tempo[,1],ignore.case = TRUE)
-  tempo[,1] <- gsub("NO$","",tempo[,1],ignore.case = TRUE)
-  tempo[,2] <- (tempo[,2]-mean(tempo[,2]))/sqrt(var(tempo[,2])) # on centre rÃ©duit
-  tempo <- arrange(tempo, desc(importance))[1:k,]
-  colnames(tempo)[2] <-  paste("imp",mot,sep = "_")
-  tempo$rank <- seq(1:k)
-  colnames(tempo)[3] <- paste("rang",mot,sep = "_")
-  return(tempo)
-}
-
-#1 Importance variable pour le modele logistique
-mod_log <- glm(DIQ010_diq~.,data=don,family="binomial")
-varimplog <- variable_imp(x=mod_log,t=1,mot="log")
-varimplog
-
-#2Importance variable pour le modele logistique step
-mod_log <- glm(DIQ010_diq ~ RIDAGEYR_demo + MCQ080_mcq + BPQ020_bpq + 
-                 BPQ080_bpq + DR1TSUGR_dr1tot + BMXWT_bmx + INDFMPIR_demo + 
-                 DR1TCHOL_dr1tot + DR1TALCO_dr1tot + RIAGENDR_demo + Var_ACTIVITE + 
-                 Var_DENTISTE + Var_TENSIONDI + SLQ050_slq + DR1TACAR_dr1tot + 
-                 BMXBMI_bmx + Var_SITUATION + HOD050_hoq + DR1TMOIS_dr1tot + 
-                 DR1.320Z_dr1tot + DR1TCAFF_dr1tot + DR1TPROT_dr1tot + DR1TIRON_dr1tot + 
-                 MCQ160N_mcq + DR1TRET_dr1tot + MCQ160D_mcq + MCQ160C_mcq + 
-                 DR1TSELE_dr1tot + DR1TFOLA_dr1tot,data=don,family="binomial")
-
-varimplogstep <- variable_imp(x=mod_log,t=1,mot="logstep")
-varimplogstep
-
-# variable     imp_log rang_log
-# 1    RIDAGEYR_demo  2.99402171        1
-# 2  DR1TSUGR_dr1tot  2.04803630        2
-# 3       BPQ080_bpq  1.76073033        3
-# 4       MCQ080_mcq  1.50381126        4
-# 5       BPQ020_bpq  1.25641657        5
-# 6  DR1TALCO_dr1tot  0.81241564        6
-# 7  DR1TMOIS_dr1tot  0.45875503        7
-# 8    RIAGENDR_demo  0.12360083        8
-# 9  DR1.320Z_dr1tot  0.11885295        9
-# 10 DR1TCHOL_dr1tot  0.09586159       10
-# 11 DR1TPROT_dr1tot  0.06684281       11
-# 12   INDFMPIR_demo  0.04296765       12
-# 13 DR1TIRON_dr1tot -0.11450863       13
-# 14   Var_TENSIONDI -0.16515044       14
-# 15 DR1TCAFF_dr1tot -0.17212308       15
-
-
-#3)Importance variable pour le modele ridge
-tmp <- cv.glmnet(XX,YY,alpha=0,family="binomial")
-mod_ridge  <- glmnet(XX,YY,alpha=0,lambda=tmp$lambda.min, family="binomial")
-varimpridge <- variable_imp(x=mod_ridge$beta,t=2,mot="ridge")
-
-#4)Importance variable pour le modele lasso (colnames(XX)[mod_lasso$beta@i])
-tmp <- cv.glmnet(XX,YY, alpha=1, family="binomial")
-mod_lasso <- glmnet(XX,YY,alpha=1, lambda =tmp$lambda.1se,family="binomial" )
-varimplasso <- variable_imp(x=mod_lasso$beta,t=2, mot="lasso")
-
-#5)Importance variable pour le modele elastic
-tmp <- cv.glmnet(XX,YY, alpha=0.5, family="binomial")
-mod_elastic <- glmnet(XX,YY,alpha = 0.5, lambda = tmp$lambda.min, family="binomial")
-varimpelastic <- variable_imp(mod_elastic$beta,t=2,mot = "elastic")
-
-#6)Importance variable pour le modele Foret
-mod_foret <- randomForest(factor(DIQ010_diq)~., data = don)
-varimpforet <- variable_imp(mod_foret,t=1,mot="foret")
-
-#7)Importance variable pour le modele adaboost
-tmp <- gbm(as.numeric(DIQ010_diq)~.,data = don, distribution = "adaboost", interaction.depth = 2,
-           shrinkage = 0.1,n.trees = 500)
-M <- gbm.perf(tmp)[1]
-mod_adaboost <- gbm(as.numeric(DIQ010_diq)~.,data = don, distribution = "adaboost", interaction.depth = 2,
-                    shrinkage = 0.1,n.trees = M)
-varimpada <- variable_imp(summary(mod_adaboost),t=3, mot="adaboost")
-
-#8)Importance variable pour le modele logitboost
-tmp <- gbm(as.numeric(DIQ010_diq)~.,data=don, distribution="bernoulli", interaction.depth = 2,
-           shrinkage=0.1,n.trees=500)
-M <- gbm.perf(tmp)[1]
-mod_logitboost <- gbm(as.numeric(DIQ010_diq)~.,data=don, distribution="bernoulli", interaction.depth = 2,
-                     shrinkage=0.1,n.trees=M)
-varimplogibo <- variable_imp(summary(mod_logitboost),t=3,mot="logitboost")
-
-#9)Importance variable pour le modele svm linéaire
-# mod_svmlin <- svm(DIQ010_diq~.,data=don2, kernel="linear",probability=T)
-# varimpsvmlin <- variable_imp(summary(mod_svmlin),t=3,mot="svmlin")
-
-#10)Importance variable pour le modele svm radial
-# mod_svmrad <- svm(DIQ010_diq~.,data=don2, kernel="radial",probability=T)
-# varimpsvmrad <- variable_imp(summary(mod_svmrad),t=3,mot="svmrad")
-
-# Croisement des tables d'importance des variables
-choix_var <- varimplog %>%
-  full_join(varimplogstep) %>%
-  full_join(varimpridge) %>%
-  full_join(varimplasso) %>%
-  full_join(varimpelastic) %>%
-  full_join(varimpforet) %>%
-  full_join(varimpada) %>%
-  full_join(varimplogibo) 
-  # full_join(varimpsvmlin) %>%
-  # full_join(varimpsvmrad)
-
-choix_var <- cbind(choix_var[,1],choix_var[,c(which(grepl("^imp",names(choix_var))))])
-
-choix_var <- as.data.frame(choix_var)
-names(choix_var)[1] <- "variable"
-write.csv2(choix_var,"choix_var_dia.csv",row.names = FALSE)
-
-
-
-
-#tuning de la random forest
-#--------------------------
-
-# set.seed(1234)
-# mod_complet <- randomForest(DIQ010_diq~.,data=nhanesfac[,-1],ntree=1000)
-# plot(mod_complet$err.rate[, 1], type = "l", xlab = "nombre d'arbres", ylab = "erreur OOB")
-# legend("topright", legend=c("mod_complet"),col=c("red"),lty=1,cex=1)
-# 
-# print(mod_complet)
-# 
-# #? l'issue de cette ?tape je retiens le mod?le r?duit et ntree=200
-# 
-# 
-# set.seed(1234)
-# oob<-list()
-# for (i in seq(2,10,1)) {
-#   mod_complet <- randomForest(DIQ010_diq~.,data=nhanesfac[,-1],ntree=200,mtry=i)  
-#   oob[[i]]<-mod_complet$err.rate[, 1][200]
-#   }
-# 
-# oob 
-# oob<-unlist(oob)
-# plot(x=seq(2,10,1),y=oob,xlab="mtry")
-# lines(x=seq(2,10,1),y=oob)
-# #mtry=6 donne le meilleur résultat
-
-
-
-
 
 
 
